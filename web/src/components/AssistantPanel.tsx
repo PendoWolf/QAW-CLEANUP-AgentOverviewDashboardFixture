@@ -1,5 +1,7 @@
 import { useState, type FormEvent } from "react";
+import { trackEvent } from "../analytics/pendo";
 import { sendAssistantMessage, type ChatMessage } from "../api/assistant";
+import { ApiError } from "../api/client";
 
 const SUGGESTED_PROMPTS = [
   "Suggest a 3-day itinerary for my next trip",
@@ -32,11 +34,30 @@ export function AssistantPanel({ onClose }: { onClose: () => void }) {
     setDraft("");
     setError(null);
     setThinking(true);
+    // Only the prompt's length and source are tracked, never its text, which may contain PII.
+    const promptSource = SUGGESTED_PROMPTS.includes(prompt) ? "suggested" : "typed";
+    const sentAt = performance.now();
     try {
       const reply = await sendAssistantMessage(conversationId, conversation);
       setMessages((current) => [...current, reply.message]);
+      // The assistant (LLM) answered and its reply was added to the conversation.
+      trackEvent("assistant_reply_received", {
+        conversationId: reply.conversationId,
+        messageCount: conversation.length + 1,
+        promptSource,
+        promptLength: prompt.length,
+        replyLength: reply.message.content.length,
+        responseTimeMs: Math.round(performance.now() - sentAt),
+      });
     } catch (e) {
       setError((e as Error).message);
+      // The assistant chat request failed and the panel shows an error.
+      trackEvent("assistant_reply_failed", {
+        conversationId,
+        messageCount: conversation.length,
+        errorStatus: e instanceof ApiError ? e.status : undefined,
+        promptSource,
+      });
     } finally {
       setThinking(false);
     }
